@@ -65,3 +65,12 @@ describe("getText", () => {
     expect(Date.now() - started).toBeGreaterThanOrEqual(190)
   })
 })
+
+describe("getText reject", () => {
+  test("retries rejected 200 bodies, never caches them, and throws the reason", async () => {
+    const reject = (body: string) => (body.startsWith("body") ? "backend error" : undefined)
+    await expect(getText(url("/soft-fail"), { ttl: 60, reject })).rejects.toThrow("backend error")
+    expect(hits["/soft-fail"]).toBe(3)
+    expect((await getText(url("/soft-fail"), { ttl: 60 })).cached).toBe(false)
+  }, 10_000)
+})

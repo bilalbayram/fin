@@ -12522,11 +12522,16 @@ async function getText(url2, options) {
     try {
       const response = await fetch(url2, { headers: options.headers, signal });
       const body = await response.text();
+      const problem = response.ok ? options.reject?.(body) : undefined;
       if (!response.ok) {
         const error45 = new HttpError(url2, response.status, body);
         if (!retryable(response.status) || attempt === MAX_ATTEMPTS)
           throw error45;
         lastError = error45;
+      } else if (problem) {
+        lastError = new Error(`GET ${url2} failed: ${problem}`);
+        if (attempt === MAX_ATTEMPTS)
+          break;
       } else {
         const result = { url: url2, body, fetchedAt: new Date().toISOString(), cached: false };
         if (options.ttl > 0)
@@ -12711,13 +12716,14 @@ async function headers() {
     Accept: "application/json, text/xml, */*"
   };
 }
-async function secJson(ctx, url2, ttl, title) {
+async function secJson(ctx, url2, ttl, title, reject) {
   const result = await getJson(url2, {
     headers: await headers(),
     ttl,
     refresh: ctx.refresh,
     signal: ctx.signal,
-    minIntervalMs: MIN_INTERVAL_MS
+    minIntervalMs: MIN_INTERVAL_MS,
+    reject
   });
   ctx.collector.add({ publisher: SEC_PUBLISHER, title, url: url2, tier: "official", retrieved_at: result.fetchedAt });
   return result.json;
@@ -14823,6 +14829,18 @@ async function insiders(ctx, input, options) {
 }
 
 // src/sources/sec/search.ts
+function searchFailure(body) {
+  let payload;
+  try {
+    payload = JSON.parse(body);
+  } catch {
+    return;
+  }
+  if (Array.isArray(payload?.hits?.hits))
+    return;
+  const detail = payload?.errorType ? `${payload.errorType}${payload.errorMessage ? `: ${payload.errorMessage.slice(0, 120)}` : ""}` : "unexpected response";
+  return `EDGAR full-text search error (${detail}). SEC's search backend fails intermittently, more often on unquoted multi-word queries: retry, or quote the phrase, e.g. '"supply chain"'.`;
+}
 var PAGE_SIZE = 100;
 async function search(ctx, query, options) {
   const params = new URLSearchParams({ q: query });
@@ -14841,7 +14859,7 @@ async function search(ctx, query, options) {
   for (let from = 0;results.length < options.limit; from += PAGE_SIZE) {
     if (from)
       params.set("from", String(from));
-    const payload = await secJson(ctx, `https://efts.sec.gov/LATEST/search-index?${params}`, TTL.search, "EDGAR full-text search");
+    const payload = await secJson(ctx, `https://efts.sec.gov/LATEST/search-index?${params}`, TTL.search, "EDGAR full-text search", searchFailure);
     total = payload.hits.total.value;
     for (const hit of payload.hits.hits) {
       const [accession, document2] = hit._id.split(":");

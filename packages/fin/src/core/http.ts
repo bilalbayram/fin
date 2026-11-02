@@ -12,6 +12,8 @@ export type FetchOptions = {
   // Minimum spacing between requests to the same host, in milliseconds.
   minIntervalMs?: number
   timeoutMs?: number
+  // Returns an error message when a 200 body is really a failure. Such bodies are retried, never cached.
+  reject?: (body: string) => string | undefined
 }
 
 export type FetchResult = {
@@ -104,10 +106,14 @@ export async function getText(url: string, options: FetchOptions): Promise<Fetch
     try {
       const response = await fetch(url, { headers: options.headers, signal })
       const body = await response.text()
+      const problem = response.ok ? options.reject?.(body) : undefined
       if (!response.ok) {
         const error = new HttpError(url, response.status, body)
         if (!retryable(response.status) || attempt === MAX_ATTEMPTS) throw error
         lastError = error
+      } else if (problem) {
+        lastError = new Error(`GET ${url} failed: ${problem}`)
+        if (attempt === MAX_ATTEMPTS) break
       } else {
         const result = { url, body, fetchedAt: new Date().toISOString(), cached: false }
         if (options.ttl > 0) await writeCache(result)
