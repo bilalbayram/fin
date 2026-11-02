@@ -6,13 +6,14 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { COMMANDS, runCli } from "../src/cli"
 import { UsageError, buildToolArgs, splitArgv } from "../src/cli/args"
 
-const ENV_KEYS = ["FINANCE_CREDENTIALS_FILE", "XDG_DATA_HOME", "SEC_EDGAR_IDENTITY", "SEC_API_USER_AGENT"]
+const ENV_KEYS = ["FINANCE_CREDENTIALS_FILE", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "SEC_EDGAR_IDENTITY", "SEC_API_USER_AGENT"]
 const saved = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]))
 let root = ""
 
 beforeEach(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), "fin-cli-"))
   process.env.FINANCE_CREDENTIALS_FILE = path.join(root, "config", "credentials.json")
+  process.env.XDG_CONFIG_HOME = path.join(root, "xdg-config")
   process.env.XDG_DATA_HOME = path.join(root, "data")
   delete process.env.SEC_EDGAR_IDENTITY
   delete process.env.SEC_API_USER_AGENT
@@ -119,7 +120,15 @@ describe("runCli", () => {
     expect(await runCli(["auth", "set", "not-a-provider", "x"], capture().io)).toBe(2)
   })
 
-  test("reads the identity saved by the retired OpenCode installer", async () => {
+  test("reads identities saved under the pre-rename config dir and the retired plugin", async () => {
+    const old = path.join(process.env.XDG_CONFIG_HOME!, "opencode-finance", "credentials.json")
+    await fs.mkdir(path.dirname(old), { recursive: true })
+    await fs.writeFile(old, JSON.stringify({ "sec-edgar": { type: "api", key: "Renamed User renamed@example.com" } }))
+    const first = capture()
+    await runCli(["auth", "list"], first.io)
+    expect(JSON.parse(first.out()).providers[0]).toMatchObject({ set: true, origin: old })
+    await fs.rm(old)
+
     const legacy = path.join(process.env.XDG_DATA_HOME!, "opencode", "auth.json")
     await fs.mkdir(path.dirname(legacy), { recursive: true })
     await fs.writeFile(legacy, JSON.stringify({ "sec-edgar": { type: "api", key: "Old User old@example.com" } }))

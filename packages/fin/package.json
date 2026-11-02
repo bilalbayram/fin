@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "fin",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Finance skill for AI agents: SEC EDGAR filings, XBRL fundamentals, insider trades and prices from primary sources, with every number cited.",
+  "type": "module",
+  "license": "MIT",
+  "homepage": "https://opencode.finance",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bilalbayram/fin"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "typecheck": "tsgo --noEmit",
+    "build": "node ./scripts/build.mjs",
+    "test": "bun test ./test"
+  },
+  "dependencies": {
+    "fast-xml-parser": "5.3.0",
+    "zod": "4.1.8"
+  },
+  "devDependencies": {
+    "@tsconfig/bun": "1.0.9",
+    "@types/bun": "1.3.9",
+    "@types/node": "22.13.9",
+    "@typescript/native-preview": "7.0.0-dev.20251207.1",
+    "typescript": "5.8.2"
+  }
+}

@@ -21,7 +21,7 @@ jobs:
         run: bun install
 
       - name: Typecheck
-        run: bun run --cwd packages/opencode-finance typecheck
+        run: bun run --cwd packages/fin typecheck
 
       - name: Test (includes the committed bundle check)
-        run: bun run --cwd packages/opencode-finance test
+        run: bun run --cwd packages/fin test

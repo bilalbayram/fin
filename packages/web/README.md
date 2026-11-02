@@ -1,16 +1,6 @@
-# @opencode-ai/web
+# fin-web
 
-Static marketing site for opencode-finance.
-
-Installer script is served from `public/install.sh` as:
-
-```bash
-curl -fsSL https://opencode.finance/install.sh | bash
-```
-
-It installs OpenCode when missing, configures `opencode-finance`, stores auth credentials, and installs/updates `finance-comprehensive-report` in `~/.opencode/skills`.
-
-## Commands
+Static marketing site for fin, served at opencode.finance.
 
 ```bash
 bun run --cwd packages/web dev

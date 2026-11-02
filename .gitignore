@@ -20,8 +20,5 @@ target
 .scripts
 .direnv/
 /reports/
-/opencode.json
-/opencode-dev
 logs/
 *.bun-build
-/.opencode/skills/
