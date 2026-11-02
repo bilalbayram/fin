@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { type CompanyFacts, type XbrlFact, extractMetric } from "../src/sources/sec/facts"
+import { type CompanyFacts, type XbrlFact, extractMetric, newerAnnualFiling } from "../src/sources/sec/facts"
+import type { Filing } from "../src/sources/sec/filings"
 
 function fact(input: Partial<XbrlFact> & Pick<XbrlFact, "end" | "val">): XbrlFact {
   return { accn: "0000000000-25-000001", form: "10-K", filed: "2025-11-01", ...input }
@@ -106,4 +107,54 @@ describe("extractMetric", () => {
     const data = company({ "us-gaap": { GrossProfit: { units: { USD: rows } } } })
     expect(extractMetric(data, "gross_profit", "annual", 2).map((item) => item.value)).toEqual([2023, 2022])
   })
+})
+
+describe("newerAnnualFiling", () => {
+  const filing = (form: string, report_date: string, filed: string): Filing => ({
+    form, report_date, filed, accession: "a", accepted_at: null, items: [], description: null, primary_document: null, document_url: null, index_url: "i",
+  })
+  test("finds the newest annual report past the latest XBRL period", () => {
+    const rows = [filing("20-F", "2024-12-31", "2025-04-29"), filing("20-F", "2025-12-31", "2026-04-17"), filing("6-K", "2026-06-30", "2026-08-01")]
+    expect(newerAnnualFiling(rows, "2023-12-31")?.report_date).toBe("2025-12-31")
+    expect(newerAnnualFiling(rows, "2025-12-31")).toBeUndefined()
+  })
+})
+
+describe("unit selection", () => {
+  test("uses the currency with the newest data, not a stray USD year", () => {
+    const data = company({
+      "ifrs-full": {
+        Revenue: {
+          units: {
+            USD: [fact({ start: "2017-01-01", end: "2017-12-31", val: 28, form: "20-F" })],
+            EUR: [
+              fact({ start: "2017-01-01", end: "2017-12-31", val: 23, form: "20-F" }),
+              fact({ start: "2025-01-01", end: "2025-12-31", val: 36, form: "20-F" }),
+            ],
+          },
+        },
+      },
+    })
+    expect(extractMetric(data, "revenue", "annual", 5).map((item) => [item.period_end, item.unit])).toEqual([
+      ["2025-12-31", "EUR"],
+      ["2017-12-31", "EUR"],
+    ])
+  })
+})
+
+test("prefers the reporting currency over a same-period USD convenience translation", () => {
+  const data = company({
+    "ifrs-full": {
+      Revenue: {
+        units: {
+          TWD: [
+            fact({ start: "2023-01-01", end: "2023-12-31", val: 2100, form: "20-F" }),
+            fact({ start: "2024-01-01", end: "2024-12-31", val: 2900, form: "20-F" }),
+          ],
+          USD: [fact({ start: "2024-01-01", end: "2024-12-31", val: 88, form: "20-F" })],
+        },
+      },
+    },
+  })
+  expect(extractMetric(data, "revenue", "annual", 5)[0]).toMatchObject({ unit: "TWD", value: 2900 })
 })

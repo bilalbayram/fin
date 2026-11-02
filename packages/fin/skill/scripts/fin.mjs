@@ -12852,6 +12852,70 @@ async function document(ctx, url2, options) {
   };
 }
 
+// src/sources/sec/filings.ts
+function normalizeForm(form) {
+  return form.toUpperCase().replace(/\s+/g, "");
+}
+function filingRows(cik, columns) {
+  const forms = columns.form ?? [];
+  return forms.map((_, index) => {
+    const at = (key) => {
+      const value = columns[key]?.[index];
+      return value === undefined || value === null || value === "" ? null : String(value);
+    };
+    const accession = at("accessionNumber");
+    const document2 = at("primaryDocument");
+    return {
+      form: at("form"),
+      accession,
+      filed: at("filingDate"),
+      report_date: at("reportDate"),
+      accepted_at: at("acceptanceDateTime"),
+      items: (at("items") ?? "").split(",").map((item) => item.trim()).filter(Boolean),
+      description: at("primaryDocDescription"),
+      primary_document: document2,
+      document_url: document2 ? filingDocumentUrl(cik, accession, document2) : null,
+      index_url: filingIndexUrl(cik, accession)
+    };
+  });
+}
+function matchesFiling(filing, query) {
+  if (query.forms?.length && !query.forms.map(normalizeForm).includes(normalizeForm(filing.form)))
+    return false;
+  if (query.since && filing.filed < query.since)
+    return false;
+  if (query.until && filing.filed > query.until)
+    return false;
+  return true;
+}
+async function listFilings(ctx, cik, query) {
+  const sub = await submissions(ctx, cik);
+  const out = [];
+  const take = (rows) => {
+    for (const row of rows) {
+      if (out.length >= query.limit)
+        return;
+      if (matchesFiling(row, query))
+        out.push(row);
+    }
+  };
+  take(filingRows(cik, sub.filings.recent));
+  for (const page of sub.filings.files ?? []) {
+    if (out.length >= query.limit || !query.since)
+      break;
+    if (page.filingTo < query.since || query.until && page.filingFrom > query.until)
+      continue;
+    const older = await secJson(ctx, `https://data.sec.gov/submissions/${page.name}`, TTL.submissions, "Company submissions (older filings)");
+    take(filingRows(cik, older));
+  }
+  return { name: sub.name, filings: out };
+}
+async function filings(ctx, input, query) {
+  const ref = await resolveCompany(ctx, input);
+  const result = await listFilings(ctx, ref.cik, query);
+  return { company: { ...ref, name: result.name }, count: result.filings.length, filings: result.filings };
+}
+
 // src/sources/sec/facts.ts
 var METRICS = {
   revenue: {
@@ -13032,9 +13096,9 @@ function pickUnit(units, kind) {
   const names = Object.keys(units);
   if (kind === "shares")
     return names.find((name) => name === "shares");
-  if (kind === "per_share")
-    return names.find((name) => name === "USD/shares") ?? names.find((name) => /^[A-Z]{3}\/shares$/.test(name));
-  return names.find((name) => name === "USD") ?? names.find((name) => /^[A-Z]{3}$/.test(name));
+  const pattern = kind === "per_share" ? /^[A-Z]{3}\/shares$/ : /^[A-Z]{3}$/;
+  const latest = (name) => units[name].reduce((max, fact) => fact.end > max ? fact.end : max, "");
+  return names.filter((name) => pattern.test(name)).sort((a, b) => latest(b).localeCompare(latest(a)) || units[b].length - units[a].length || Number(b.startsWith("USD")) - Number(a.startsWith("USD")))[0];
 }
 function inPeriod(fact, timing, period) {
   if (timing === "duration") {
@@ -13084,6 +13148,9 @@ function extractMetric(facts, key, period, limit) {
 async function companyFacts(ctx, cik) {
   return secJson(ctx, `https://data.sec.gov/api/xbrl/companyfacts/CIK${padCik(cik)}.json`, TTL.facts, "XBRL company facts");
 }
+function newerAnnualFiling(filings2, latestEnd) {
+  return filings2.filter((item) => ANNUAL_FORMS.test(normalizeForm(item.form)) && item.report_date && (!latestEnd || item.report_date > latestEnd)).sort((a, b) => a.report_date < b.report_date ? 1 : -1)[0];
+}
 async function facts(ctx, input, options) {
   const unknown2 = (options.metrics ?? []).filter((key) => !METRICS[key]);
   if (unknown2.length)
@@ -13105,6 +13172,14 @@ async function facts(ctx, input, options) {
   }
   if (missing.length) {
     ctx.collector.warn(`No value found for: ${missing.join(", ")}. The company may use a custom tag; inspect with \`fin sec concept\` or the filing itself.`);
+  }
+  if (options.period === "annual") {
+    const latestEnd = Object.values(metrics).flatMap((metric) => metric.values.map((value) => value.period_end)).sort().at(-1);
+    const sub = await submissions(ctx, ref.cik);
+    const newer = newerAnnualFiling(filingRows(ref.cik, sub.filings.recent), latestEnd);
+    if (newer) {
+      ctx.collector.warn(`${newer.form} for period ${newer.report_date} (filed ${newer.filed}) is newer than the latest XBRL value (${latestEnd ?? "none"}); SEC has no structured data for it. Read it with \`fin sec document ${newer.document_url ?? newer.index_url}\`.`);
+    }
   }
   return {
     company: { ...ref, name: data.entityName },
@@ -13168,70 +13243,6 @@ async function frames(ctx, tag, period, options) {
       filing_url: filingIndexUrl(row.cik, row.accn)
     }))
   };
-}
-
-// src/sources/sec/filings.ts
-function normalizeForm(form) {
-  return form.toUpperCase().replace(/\s+/g, "");
-}
-function filingRows(cik, columns) {
-  const forms = columns.form ?? [];
-  return forms.map((_, index) => {
-    const at = (key) => {
-      const value = columns[key]?.[index];
-      return value === undefined || value === null || value === "" ? null : String(value);
-    };
-    const accession = at("accessionNumber");
-    const document2 = at("primaryDocument");
-    return {
-      form: at("form"),
-      accession,
-      filed: at("filingDate"),
-      report_date: at("reportDate"),
-      accepted_at: at("acceptanceDateTime"),
-      items: (at("items") ?? "").split(",").map((item) => item.trim()).filter(Boolean),
-      description: at("primaryDocDescription"),
-      primary_document: document2,
-      document_url: document2 ? filingDocumentUrl(cik, accession, document2) : null,
-      index_url: filingIndexUrl(cik, accession)
-    };
-  });
-}
-function matchesFiling(filing, query) {
-  if (query.forms?.length && !query.forms.map(normalizeForm).includes(normalizeForm(filing.form)))
-    return false;
-  if (query.since && filing.filed < query.since)
-    return false;
-  if (query.until && filing.filed > query.until)
-    return false;
-  return true;
-}
-async function listFilings(ctx, cik, query) {
-  const sub = await submissions(ctx, cik);
-  const out = [];
-  const take = (rows) => {
-    for (const row of rows) {
-      if (out.length >= query.limit)
-        return;
-      if (matchesFiling(row, query))
-        out.push(row);
-    }
-  };
-  take(filingRows(cik, sub.filings.recent));
-  for (const page of sub.filings.files ?? []) {
-    if (out.length >= query.limit || !query.since)
-      break;
-    if (page.filingTo < query.since || query.until && page.filingFrom > query.until)
-      continue;
-    const older = await secJson(ctx, `https://data.sec.gov/submissions/${page.name}`, TTL.submissions, "Company submissions (older filings)");
-    take(filingRows(cik, older));
-  }
-  return { name: sub.name, filings: out };
-}
-async function filings(ctx, input, query) {
-  const ref = await resolveCompany(ctx, input);
-  const result = await listFilings(ctx, ref.cik, query);
-  return { company: { ...ref, name: result.name }, count: result.filings.length, filings: result.filings };
 }
 
 // ../../node_modules/.bun/fast-xml-parser@5.3.0/node_modules/fast-xml-parser/src/util.js
