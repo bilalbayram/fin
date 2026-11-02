@@ -13180,8 +13180,13 @@ async function facts(ctx, input, options) {
   }
   if (options.period === "annual") {
     const latestEnd = Object.values(metrics).flatMap((metric) => metric.values.map((value) => value.period_end)).sort().at(-1);
-    const sub = await submissions(ctx, ref.cik);
-    const newer = newerAnnualFiling(filingRows(ref.cik, sub.filings.recent), latestEnd);
+    const sub = await submissions(ctx, ref.cik).catch((error45) => {
+      if (ctx.signal?.aborted)
+        throw error45;
+      ctx.collector.warn(`Could not check for annual reports newer than the XBRL data: ${error45 instanceof Error ? error45.message : String(error45)}`);
+      return;
+    });
+    const newer = sub && newerAnnualFiling(filingRows(ref.cik, sub.filings.recent), latestEnd);
     if (newer) {
       ctx.collector.warn(`${newer.form} for period ${newer.report_date} (filed ${newer.filed}) is newer than the latest XBRL value (${latestEnd ?? "none"}); SEC has no structured data for it. Read it with \`fin sec document ${newer.document_url ?? newer.index_url}\`.`);
     }

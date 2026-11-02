@@ -332,8 +332,13 @@ export async function facts(ctx: SecContext, input: string, options: { period: P
 
   if (options.period === "annual") {
     const latestEnd = Object.values(metrics).flatMap((metric) => metric.values.map((value) => value.period_end)).sort().at(-1)
-    const sub = await submissions(ctx, ref.cik)
-    const newer = newerAnnualFiling(filingRows(ref.cik, sub.filings.recent), latestEnd)
+    // Best-effort: the facts are valid even if the filing history cannot be fetched.
+    const sub = await submissions(ctx, ref.cik).catch((error: unknown) => {
+      if (ctx.signal?.aborted) throw error
+      ctx.collector.warn(`Could not check for annual reports newer than the XBRL data: ${error instanceof Error ? error.message : String(error)}`)
+      return undefined
+    })
+    const newer = sub && newerAnnualFiling(filingRows(ref.cik, sub.filings.recent), latestEnd)
     if (newer) {
       ctx.collector.warn(
         `${newer.form} for period ${newer.report_date} (filed ${newer.filed}) is newer than the latest XBRL value (${latestEnd ?? "none"}); SEC has no structured data for it. Read it with \`fin sec document ${newer.document_url ?? newer.index_url}\`.`,
