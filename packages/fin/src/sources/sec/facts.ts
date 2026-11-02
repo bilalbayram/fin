@@ -1,4 +1,5 @@
 import { type SecContext, TTL, filingIndexUrl, padCik, secJson } from "./client"
+import { UsageError } from "../../core/errors"
 import { resolveCompany, submissions } from "./company"
 import { type Filing, filingRows, normalizeForm } from "./filings"
 
@@ -302,7 +303,7 @@ export function newerAnnualFiling(filings: Filing[], latestEnd: string | undefin
 
 export async function facts(ctx: SecContext, input: string, options: { period: Period; limit: number; metrics?: string[] }) {
   const unknown = (options.metrics ?? []).filter((key) => !METRICS[key])
-  if (unknown.length) throw new Error(`unknown metric(s): ${unknown.join(", ")}. Known: ${Object.keys(METRICS).join(", ")}`)
+  if (unknown.length) throw new UsageError(`unknown metric(s): ${unknown.join(", ")}. Known: ${Object.keys(METRICS).join(", ")}`)
 
   const ref = await resolveCompany(ctx, input)
   const data = await companyFacts(ctx, ref.cik)

@@ -12852,6 +12852,10 @@ async function document(ctx, url2, options) {
   };
 }
 
+// src/core/errors.ts
+class UsageError extends Error {
+}
+
 // src/sources/sec/filings.ts
 function normalizeForm(form) {
   return form.toUpperCase().replace(/\s+/g, "");
@@ -13154,7 +13158,7 @@ function newerAnnualFiling(filings2, latestEnd) {
 async function facts(ctx, input, options) {
   const unknown2 = (options.metrics ?? []).filter((key) => !METRICS[key]);
   if (unknown2.length)
-    throw new Error(`unknown metric(s): ${unknown2.join(", ")}. Known: ${Object.keys(METRICS).join(", ")}`);
+    throw new UsageError(`unknown metric(s): ${unknown2.join(", ")}. Known: ${Object.keys(METRICS).join(", ")}`);
   const ref = await resolveCompany(ctx, input);
   const data = await companyFacts(ctx, ref.cik);
   const keys = options.metrics?.length ? options.metrics : Object.keys(METRICS);
@@ -14900,8 +14904,6 @@ async function search(ctx, query, options) {
 }
 
 // src/cli/args.ts
-class UsageError extends Error {
-}
 function splitArgv(argv) {
   const positional = [];
   const flags = new Map;

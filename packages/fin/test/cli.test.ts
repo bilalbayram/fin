@@ -137,3 +137,10 @@ describe("runCli", () => {
     expect(JSON.parse(io.out()).providers[0]).toMatchObject({ set: true, origin: legacy })
   })
 })
+
+test("an unknown facts metric is a usage error (exit 2)", async () => {
+  process.env.SEC_EDGAR_IDENTITY = "Test User test@example.com"
+  const io = capture()
+  expect(await runCli(["sec", "facts", "AAPL", "--metrics", "capex"], io.io)).toBe(2)
+  expect(JSON.parse(io.err()).error).toContain("capital_expenditure")
+})
