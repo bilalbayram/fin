@@ -1,7 +1,7 @@
 import { type SecContext, TTL, filingIndexUrl, padCik, secJson } from "./client"
 import { UsageError } from "../../core/errors"
-import { resolveCompany, submissions } from "./company"
-import { type Filing, filingRows, normalizeForm } from "./filings"
+import { resolveCompany } from "./company"
+import { type Filing, listFilings, normalizeForm } from "./filings"
 
 export type XbrlFact = {
   start?: string
@@ -44,6 +44,8 @@ export const METRICS: Record<string, MetricDef> = {
       "us-gaap:Revenues",
       "us-gaap:RevenueFromContractWithCustomerIncludingAssessedTax",
       "us-gaap:SalesRevenueNet",
+      // Banks and brokers (GS, MS, JPM) report net revenues.
+      "us-gaap:RevenuesNetOfInterestExpense",
       "ifrs-full:Revenue",
     ],
   },
@@ -221,6 +223,7 @@ export type MetricValue = {
 }
 
 const ANNUAL_FORMS = /^(10-K|10-KT|20-F|40-F)(\/A)?$/
+const ANNUAL_FORM_NAMES = ["10-K", "10-K/A", "10-KT", "10-KT/A", "20-F", "20-F/A", "40-F", "40-F/A"]
 
 function days(start: string, end: string) {
   return (Date.parse(end) - Date.parse(start)) / 86_400_000
@@ -330,15 +333,18 @@ export async function facts(ctx: SecContext, input: string, options: { period: P
     )
   }
 
-  if (options.period === "annual") {
+  // No metric found means no baseline to compare; the missing-metric warning already covers it.
+  const found = Object.keys(metrics).length > 0
+  if (options.period === "annual" && found) {
     const latestEnd = Object.values(metrics).flatMap((metric) => metric.values.map((value) => value.period_end)).sort().at(-1)
-    // Best-effort: the facts are valid even if the filing history cannot be fetched.
-    const sub = await submissions(ctx, ref.cik).catch((error: unknown) => {
+    // Best-effort: the facts are valid even if the filing history cannot be fetched. Searching from the
+    // newest XBRL period walks archived pages too, which heavy filers (banks with thousands of 424B2s) need.
+    const history = await listFilings(ctx, ref.cik, { forms: ANNUAL_FORM_NAMES, since: latestEnd, limit: 50 }).catch((error: unknown) => {
       if (ctx.signal?.aborted) throw error
       ctx.collector.warn(`Could not check for annual reports newer than the XBRL data: ${error instanceof Error ? error.message : String(error)}`)
       return undefined
     })
-    const newer = sub && newerAnnualFiling(filingRows(ref.cik, sub.filings.recent), latestEnd)
+    const newer = history && newerAnnualFiling(history.filings, latestEnd)
     if (newer) {
       ctx.collector.warn(
         `${newer.form} for period ${newer.report_date} (filed ${newer.filed}) is newer than the latest XBRL value (${latestEnd ?? "none"}); SEC has no structured data for it. Read it with \`fin sec document ${newer.document_url ?? newer.index_url}\`.`,

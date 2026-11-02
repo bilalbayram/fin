@@ -178,3 +178,10 @@ test("a newer interim USD fact does not pick USD for an annual query", () => {
   })
   expect(extractMetric(data, "revenue", "annual", 5)[0]).toMatchObject({ unit: "EUR", value: 36 })
 })
+
+test("banks' net revenues count as revenue", () => {
+  const data = company({
+    "us-gaap": { RevenuesNetOfInterestExpense: { units: { USD: [fact({ start: "2025-01-01", end: "2025-12-31", val: 58 })] } } },
+  })
+  expect(extractMetric(data, "revenue", "annual", 5)[0]).toMatchObject({ value: 58, tag: "us-gaap:RevenuesNetOfInterestExpense" })
+})

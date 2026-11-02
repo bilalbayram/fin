@@ -12931,6 +12931,7 @@ var METRICS = {
       "us-gaap:Revenues",
       "us-gaap:RevenueFromContractWithCustomerIncludingAssessedTax",
       "us-gaap:SalesRevenueNet",
+      "us-gaap:RevenuesNetOfInterestExpense",
       "ifrs-full:Revenue"
     ]
   },
@@ -13093,6 +13094,7 @@ var METRICS = {
   }
 };
 var ANNUAL_FORMS = /^(10-K|10-KT|20-F|40-F)(\/A)?$/;
+var ANNUAL_FORM_NAMES = ["10-K", "10-K/A", "10-KT", "10-KT/A", "20-F", "20-F/A", "40-F", "40-F/A"];
 function days(start, end) {
   return (Date.parse(end) - Date.parse(start)) / 86400000;
 }
@@ -13178,15 +13180,16 @@ async function facts(ctx, input, options) {
   if (missing.length) {
     ctx.collector.warn(`No value found for: ${missing.join(", ")}. The company may use a custom tag; inspect with \`fin sec concept\` or the filing itself.`);
   }
-  if (options.period === "annual") {
+  const found = Object.keys(metrics).length > 0;
+  if (options.period === "annual" && found) {
     const latestEnd = Object.values(metrics).flatMap((metric) => metric.values.map((value) => value.period_end)).sort().at(-1);
-    const sub = await submissions(ctx, ref.cik).catch((error45) => {
+    const history = await listFilings(ctx, ref.cik, { forms: ANNUAL_FORM_NAMES, since: latestEnd, limit: 50 }).catch((error45) => {
       if (ctx.signal?.aborted)
         throw error45;
       ctx.collector.warn(`Could not check for annual reports newer than the XBRL data: ${error45 instanceof Error ? error45.message : String(error45)}`);
       return;
     });
-    const newer = sub && newerAnnualFiling(filingRows(ref.cik, sub.filings.recent), latestEnd);
+    const newer = history && newerAnnualFiling(history.filings, latestEnd);
     if (newer) {
       ctx.collector.warn(`${newer.form} for period ${newer.report_date} (filed ${newer.filed}) is newer than the latest XBRL value (${latestEnd ?? "none"}); SEC has no structured data for it. Read it with \`fin sec document ${newer.document_url ?? newer.index_url}\`.`);
     }
