@@ -12511,7 +12511,7 @@ function retryable(status) {
 async function getText(url2, options) {
   if (options.ttl > 0 && !options.refresh) {
     const cached2 = await readCache(url2, options.ttl);
-    if (cached2)
+    if (cached2 && !options.reject?.(cached2.body))
       return cached2;
   }
   let lastError;
@@ -12522,11 +12522,16 @@ async function getText(url2, options) {
     try {
       const response = await fetch(url2, { headers: options.headers, signal });
       const body = await response.text();
+      const problem = response.ok ? options.reject?.(body) : undefined;
       if (!response.ok) {
         const error45 = new HttpError(url2, response.status, body);
         if (!retryable(response.status) || attempt === MAX_ATTEMPTS)
           throw error45;
         lastError = error45;
+      } else if (problem) {
+        lastError = new Error(`GET ${url2} failed: ${problem}`);
+        if (attempt === MAX_ATTEMPTS)
+          break;
       } else {
         const result = { url: url2, body, fetchedAt: new Date().toISOString(), cached: false };
         if (options.ttl > 0)
@@ -12711,13 +12716,14 @@ async function headers() {
     Accept: "application/json, text/xml, */*"
   };
 }
-async function secJson(ctx, url2, ttl, title) {
+async function secJson(ctx, url2, ttl, title, reject) {
   const result = await getJson(url2, {
     headers: await headers(),
     ttl,
     refresh: ctx.refresh,
     signal: ctx.signal,
-    minIntervalMs: MIN_INTERVAL_MS
+    minIntervalMs: MIN_INTERVAL_MS,
+    reject
   });
   ctx.collector.add({ publisher: SEC_PUBLISHER, title, url: url2, tier: "official", retrieved_at: result.fetchedAt });
   return result.json;
@@ -12846,6 +12852,74 @@ async function document(ctx, url2, options) {
   };
 }
 
+// src/core/errors.ts
+class UsageError extends Error {
+}
+
+// src/sources/sec/filings.ts
+function normalizeForm(form) {
+  return form.toUpperCase().replace(/\s+/g, "");
+}
+function filingRows(cik, columns) {
+  const forms = columns.form ?? [];
+  return forms.map((_, index) => {
+    const at = (key) => {
+      const value = columns[key]?.[index];
+      return value === undefined || value === null || value === "" ? null : String(value);
+    };
+    const accession = at("accessionNumber");
+    const document2 = at("primaryDocument");
+    return {
+      form: at("form"),
+      accession,
+      filed: at("filingDate"),
+      report_date: at("reportDate"),
+      accepted_at: at("acceptanceDateTime"),
+      items: (at("items") ?? "").split(",").map((item) => item.trim()).filter(Boolean),
+      description: at("primaryDocDescription"),
+      primary_document: document2,
+      document_url: document2 ? filingDocumentUrl(cik, accession, document2) : null,
+      index_url: filingIndexUrl(cik, accession)
+    };
+  });
+}
+function matchesFiling(filing, query) {
+  if (query.forms?.length && !query.forms.map(normalizeForm).includes(normalizeForm(filing.form)))
+    return false;
+  if (query.since && filing.filed < query.since)
+    return false;
+  if (query.until && filing.filed > query.until)
+    return false;
+  return true;
+}
+async function listFilings(ctx, cik, query) {
+  const sub = await submissions(ctx, cik);
+  const out = [];
+  const take = (rows) => {
+    for (const row of rows) {
+      if (out.length >= query.limit)
+        return;
+      if (matchesFiling(row, query))
+        out.push(row);
+    }
+  };
+  take(filingRows(cik, sub.filings.recent));
+  for (const page of sub.filings.files ?? []) {
+    if (out.length >= query.limit || !query.since)
+      break;
+    if (page.filingTo < query.since || query.until && page.filingFrom > query.until)
+      continue;
+    const older = await secJson(ctx, `https://data.sec.gov/submissions/${page.name}`, TTL.submissions, "Company submissions (older filings)");
+    take(filingRows(cik, older));
+  }
+  return { name: sub.name, filings: out };
+}
+async function filings(ctx, input, query) {
+  const ref = await resolveCompany(ctx, input);
+  const result = await listFilings(ctx, ref.cik, query);
+  return { company: { ...ref, name: result.name }, count: result.filings.length, filings: result.filings };
+}
+
 // src/sources/sec/facts.ts
 var METRICS = {
   revenue: {
@@ -12857,6 +12931,7 @@ var METRICS = {
       "us-gaap:Revenues",
       "us-gaap:RevenueFromContractWithCustomerIncludingAssessedTax",
       "us-gaap:SalesRevenueNet",
+      "us-gaap:RevenuesNetOfInterestExpense",
       "ifrs-full:Revenue"
     ]
   },
@@ -13019,16 +13094,18 @@ var METRICS = {
   }
 };
 var ANNUAL_FORMS = /^(10-K|10-KT|20-F|40-F)(\/A)?$/;
+var ANNUAL_FORM_NAMES = ["10-K", "10-K/A", "10-KT", "10-KT/A", "20-F", "20-F/A", "40-F", "40-F/A"];
 function days(start, end) {
   return (Date.parse(end) - Date.parse(start)) / 86400000;
 }
-function pickUnit(units, kind) {
+function pickUnit(units, kind, eligible) {
   const names = Object.keys(units);
   if (kind === "shares")
     return names.find((name) => name === "shares");
-  if (kind === "per_share")
-    return names.find((name) => name === "USD/shares") ?? names.find((name) => /^[A-Z]{3}\/shares$/.test(name));
-  return names.find((name) => name === "USD") ?? names.find((name) => /^[A-Z]{3}$/.test(name));
+  const pattern = kind === "per_share" ? /^[A-Z]{3}\/shares$/ : /^[A-Z]{3}$/;
+  const usable = Object.fromEntries(names.filter((name) => pattern.test(name)).map((name) => [name, units[name].filter(eligible)]));
+  const latest = (name) => usable[name].reduce((max, fact) => fact.end > max ? fact.end : max, "");
+  return Object.keys(usable).filter((name) => usable[name].length).sort((a, b) => latest(b).localeCompare(latest(a)) || usable[b].length - usable[a].length || Number(b.startsWith("USD")) - Number(a.startsWith("USD")))[0];
 }
 function inPeriod(fact, timing, period) {
   if (timing === "duration") {
@@ -13049,7 +13126,7 @@ function extractMetric(facts, key, period, limit) {
     const concept = facts.facts[taxonomy]?.[name];
     if (!concept)
       return;
-    const unit = pickUnit(concept.units, def.kind);
+    const unit = pickUnit(concept.units, def.kind, (fact) => inPeriod(fact, def.timing, period));
     if (!unit)
       return;
     for (const fact of concept.units[unit] ?? []) {
@@ -13078,10 +13155,13 @@ function extractMetric(facts, key, period, limit) {
 async function companyFacts(ctx, cik) {
   return secJson(ctx, `https://data.sec.gov/api/xbrl/companyfacts/CIK${padCik(cik)}.json`, TTL.facts, "XBRL company facts");
 }
+function newerAnnualFiling(filings2, latestEnd) {
+  return filings2.filter((item) => ANNUAL_FORMS.test(normalizeForm(item.form)) && item.report_date && (!latestEnd || item.report_date > latestEnd)).sort((a, b) => a.report_date < b.report_date ? 1 : -1)[0];
+}
 async function facts(ctx, input, options) {
   const unknown2 = (options.metrics ?? []).filter((key) => !METRICS[key]);
   if (unknown2.length)
-    throw new Error(`unknown metric(s): ${unknown2.join(", ")}. Known: ${Object.keys(METRICS).join(", ")}`);
+    throw new UsageError(`unknown metric(s): ${unknown2.join(", ")}. Known: ${Object.keys(METRICS).join(", ")}`);
   const ref = await resolveCompany(ctx, input);
   const data = await companyFacts(ctx, ref.cik);
   const keys = options.metrics?.length ? options.metrics : Object.keys(METRICS);
@@ -13099,6 +13179,20 @@ async function facts(ctx, input, options) {
   }
   if (missing.length) {
     ctx.collector.warn(`No value found for: ${missing.join(", ")}. The company may use a custom tag; inspect with \`fin sec concept\` or the filing itself.`);
+  }
+  const found = Object.keys(metrics).length > 0;
+  if (options.period === "annual" && found) {
+    const latestEnd = Object.values(metrics).flatMap((metric) => metric.values.map((value) => value.period_end)).sort().at(-1);
+    const history = await listFilings(ctx, ref.cik, { forms: ANNUAL_FORM_NAMES, since: latestEnd, limit: 50 }).catch((error45) => {
+      if (ctx.signal?.aborted)
+        throw error45;
+      ctx.collector.warn(`Could not check for annual reports newer than the XBRL data: ${error45 instanceof Error ? error45.message : String(error45)}`);
+      return;
+    });
+    const newer = history && newerAnnualFiling(history.filings, latestEnd);
+    if (newer) {
+      ctx.collector.warn(`${newer.form} for period ${newer.report_date} (filed ${newer.filed}) is newer than the latest XBRL value (${latestEnd ?? "none"}); SEC has no structured data for it. Read it with \`fin sec document ${newer.document_url ?? newer.index_url}\`.`);
+    }
   }
   return {
     company: { ...ref, name: data.entityName },
@@ -13162,70 +13256,6 @@ async function frames(ctx, tag, period, options) {
       filing_url: filingIndexUrl(row.cik, row.accn)
     }))
   };
-}
-
-// src/sources/sec/filings.ts
-function normalizeForm(form) {
-  return form.toUpperCase().replace(/\s+/g, "");
-}
-function filingRows(cik, columns) {
-  const forms = columns.form ?? [];
-  return forms.map((_, index) => {
-    const at = (key) => {
-      const value = columns[key]?.[index];
-      return value === undefined || value === null || value === "" ? null : String(value);
-    };
-    const accession = at("accessionNumber");
-    const document2 = at("primaryDocument");
-    return {
-      form: at("form"),
-      accession,
-      filed: at("filingDate"),
-      report_date: at("reportDate"),
-      accepted_at: at("acceptanceDateTime"),
-      items: (at("items") ?? "").split(",").map((item) => item.trim()).filter(Boolean),
-      description: at("primaryDocDescription"),
-      primary_document: document2,
-      document_url: document2 ? filingDocumentUrl(cik, accession, document2) : null,
-      index_url: filingIndexUrl(cik, accession)
-    };
-  });
-}
-function matchesFiling(filing, query) {
-  if (query.forms?.length && !query.forms.map(normalizeForm).includes(normalizeForm(filing.form)))
-    return false;
-  if (query.since && filing.filed < query.since)
-    return false;
-  if (query.until && filing.filed > query.until)
-    return false;
-  return true;
-}
-async function listFilings(ctx, cik, query) {
-  const sub = await submissions(ctx, cik);
-  const out = [];
-  const take = (rows) => {
-    for (const row of rows) {
-      if (out.length >= query.limit)
-        return;
-      if (matchesFiling(row, query))
-        out.push(row);
-    }
-  };
-  take(filingRows(cik, sub.filings.recent));
-  for (const page of sub.filings.files ?? []) {
-    if (out.length >= query.limit || !query.since)
-      break;
-    if (page.filingTo < query.since || query.until && page.filingFrom > query.until)
-      continue;
-    const older = await secJson(ctx, `https://data.sec.gov/submissions/${page.name}`, TTL.submissions, "Company submissions (older filings)");
-    take(filingRows(cik, older));
-  }
-  return { name: sub.name, filings: out };
-}
-async function filings(ctx, input, query) {
-  const ref = await resolveCompany(ctx, input);
-  const result = await listFilings(ctx, ref.cik, query);
-  return { company: { ...ref, name: result.name }, count: result.filings.length, filings: result.filings };
 }
 
 // ../../node_modules/.bun/fast-xml-parser@5.3.0/node_modules/fast-xml-parser/src/util.js
@@ -14823,6 +14853,18 @@ async function insiders(ctx, input, options) {
 }
 
 // src/sources/sec/search.ts
+function searchFailure(body) {
+  let payload;
+  try {
+    payload = JSON.parse(body);
+  } catch {
+    return;
+  }
+  if (Array.isArray(payload?.hits?.hits))
+    return;
+  const detail = payload?.errorType ? `${payload.errorType}${payload.errorMessage ? `: ${payload.errorMessage.slice(0, 120)}` : ""}` : "unexpected response";
+  return `EDGAR full-text search error (${detail}). SEC's search backend fails intermittently, more often on unquoted multi-word queries: retry, or quote the phrase, e.g. '"supply chain"'.`;
+}
 var PAGE_SIZE = 100;
 async function search(ctx, query, options) {
   const params = new URLSearchParams({ q: query });
@@ -14841,7 +14883,7 @@ async function search(ctx, query, options) {
   for (let from = 0;results.length < options.limit; from += PAGE_SIZE) {
     if (from)
       params.set("from", String(from));
-    const payload = await secJson(ctx, `https://efts.sec.gov/LATEST/search-index?${params}`, TTL.search, "EDGAR full-text search");
+    const payload = await secJson(ctx, `https://efts.sec.gov/LATEST/search-index?${params}`, TTL.search, "EDGAR full-text search", searchFailure);
     total = payload.hits.total.value;
     for (const hit of payload.hits.hits) {
       const [accession, document2] = hit._id.split(":");
@@ -14871,8 +14913,6 @@ async function search(ctx, query, options) {
 }
 
 // src/cli/args.ts
-class UsageError extends Error {
-}
 function splitArgv(argv) {
   const positional = [];
   const flags = new Map;

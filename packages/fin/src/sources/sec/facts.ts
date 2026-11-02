@@ -1,5 +1,7 @@
 import { type SecContext, TTL, filingIndexUrl, padCik, secJson } from "./client"
+import { UsageError } from "../../core/errors"
 import { resolveCompany } from "./company"
+import { type Filing, listFilings, normalizeForm } from "./filings"
 
 export type XbrlFact = {
   start?: string
@@ -42,6 +44,8 @@ export const METRICS: Record<string, MetricDef> = {
       "us-gaap:Revenues",
       "us-gaap:RevenueFromContractWithCustomerIncludingAssessedTax",
       "us-gaap:SalesRevenueNet",
+      // Banks and brokers (GS, MS, JPM) report net revenues.
+      "us-gaap:RevenuesNetOfInterestExpense",
       "ifrs-full:Revenue",
     ],
   },
@@ -219,16 +223,25 @@ export type MetricValue = {
 }
 
 const ANNUAL_FORMS = /^(10-K|10-KT|20-F|40-F)(\/A)?$/
+const ANNUAL_FORM_NAMES = ["10-K", "10-K/A", "10-KT", "10-KT/A", "20-F", "20-F/A", "40-F", "40-F/A"]
 
 function days(start: string, end: string) {
   return (Date.parse(end) - Date.parse(start)) / 86_400_000
 }
 
-function pickUnit(units: Record<string, XbrlFact[]>, kind: Kind) {
+function pickUnit(units: Record<string, XbrlFact[]>, kind: Kind, eligible: (fact: XbrlFact) => boolean) {
   const names = Object.keys(units)
   if (kind === "shares") return names.find((name) => name === "shares")
-  if (kind === "per_share") return names.find((name) => name === "USD/shares") ?? names.find((name) => /^[A-Z]{3}\/shares$/.test(name))
-  return names.find((name) => name === "USD") ?? names.find((name) => /^[A-Z]{3}$/.test(name))
+  const pattern = kind === "per_share" ? /^[A-Z]{3}\/shares$/ : /^[A-Z]{3}$/
+  // Judge each currency only by facts usable for the requested period, so a newer interim USD fact
+  // cannot win an annual query.
+  const usable = Object.fromEntries(names.filter((name) => pattern.test(name)).map((name) => [name, units[name]!.filter(eligible)]))
+  const latest = (name: string) => usable[name]!.reduce((max, fact) => (fact.end > max ? fact.end : max), "")
+  // Reporting currency = newest data, then the longest history. Foreign filers often add USD convenience
+  // translations (SAP: one stray USD year; TSM: USD alongside TWD), which must not displace it.
+  return Object.keys(usable)
+    .filter((name) => usable[name]!.length)
+    .sort((a, b) => latest(b).localeCompare(latest(a)) || usable[b]!.length - usable[a]!.length || Number(b.startsWith("USD")) - Number(a.startsWith("USD")))[0]
 }
 
 export function inPeriod(fact: XbrlFact, timing: MetricDef["timing"], period: Period) {
@@ -250,7 +263,7 @@ export function extractMetric(facts: CompanyFacts, key: string, period: Period, 
     const [taxonomy, name] = tag.split(":") as [string, string]
     const concept = facts.facts[taxonomy]?.[name]
     if (!concept) return
-    const unit = pickUnit(concept.units, def.kind)
+    const unit = pickUnit(concept.units, def.kind, (fact) => inPeriod(fact, def.timing, period))
     if (!unit) return
     for (const fact of concept.units[unit] ?? []) {
       if (typeof fact.val !== "number" || !inPeriod(fact, def.timing, period)) continue
@@ -287,9 +300,16 @@ export async function companyFacts(ctx: SecContext, cik: string) {
   )
 }
 
+// SEC's XBRL API can omit filings (some foreign filers stop tagging); find annual reports newer than the data.
+export function newerAnnualFiling(filings: Filing[], latestEnd: string | undefined) {
+  return filings
+    .filter((item) => ANNUAL_FORMS.test(normalizeForm(item.form)) && item.report_date && (!latestEnd || item.report_date > latestEnd))
+    .sort((a, b) => (a.report_date! < b.report_date! ? 1 : -1))[0]
+}
+
 export async function facts(ctx: SecContext, input: string, options: { period: Period; limit: number; metrics?: string[] }) {
   const unknown = (options.metrics ?? []).filter((key) => !METRICS[key])
-  if (unknown.length) throw new Error(`unknown metric(s): ${unknown.join(", ")}. Known: ${Object.keys(METRICS).join(", ")}`)
+  if (unknown.length) throw new UsageError(`unknown metric(s): ${unknown.join(", ")}. Known: ${Object.keys(METRICS).join(", ")}`)
 
   const ref = await resolveCompany(ctx, input)
   const data = await companyFacts(ctx, ref.cik)
@@ -311,6 +331,25 @@ export async function facts(ctx: SecContext, input: string, options: { period: P
     ctx.collector.warn(
       `No value found for: ${missing.join(", ")}. The company may use a custom tag; inspect with \`fin sec concept\` or the filing itself.`,
     )
+  }
+
+  // No metric found means no baseline to compare; the missing-metric warning already covers it.
+  const found = Object.keys(metrics).length > 0
+  if (options.period === "annual" && found) {
+    const latestEnd = Object.values(metrics).flatMap((metric) => metric.values.map((value) => value.period_end)).sort().at(-1)
+    // Best-effort: the facts are valid even if the filing history cannot be fetched. Searching from the
+    // newest XBRL period walks archived pages too, which heavy filers (banks with thousands of 424B2s) need.
+    const history = await listFilings(ctx, ref.cik, { forms: ANNUAL_FORM_NAMES, since: latestEnd, limit: 50 }).catch((error: unknown) => {
+      if (ctx.signal?.aborted) throw error
+      ctx.collector.warn(`Could not check for annual reports newer than the XBRL data: ${error instanceof Error ? error.message : String(error)}`)
+      return undefined
+    })
+    const newer = history && newerAnnualFiling(history.filings, latestEnd)
+    if (newer) {
+      ctx.collector.warn(
+        `${newer.form} for period ${newer.report_date} (filed ${newer.filed}) is newer than the latest XBRL value (${latestEnd ?? "none"}); SEC has no structured data for it. Read it with \`fin sec document ${newer.document_url ?? newer.index_url}\`.`,
+      )
+    }
   }
 
   return {

@@ -65,3 +65,19 @@ describe("getText", () => {
     expect(Date.now() - started).toBeGreaterThanOrEqual(190)
   })
 })
+
+describe("getText reject", () => {
+  test("retries rejected 200 bodies, never caches them, and throws the reason", async () => {
+    const reject = (body: string) => (body.startsWith("body") ? "backend error" : undefined)
+    await expect(getText(url("/soft-fail"), { ttl: 60, reject })).rejects.toThrow("backend error")
+    expect(hits["/soft-fail"]).toBe(3)
+    expect((await getText(url("/soft-fail"), { ttl: 60 })).cached).toBe(false)
+  }, 10_000)
+})
+
+test("a cached body that reject() refuses is ignored and refetched", async () => {
+  await getText(url("/cached-bad"), { ttl: 60 })
+  const reject = (body: string) => (body === "body 1" ? "stale error body" : undefined)
+  const fresh = await getText(url("/cached-bad"), { ttl: 60, reject })
+  expect(fresh).toMatchObject({ body: "body 2", cached: false })
+})

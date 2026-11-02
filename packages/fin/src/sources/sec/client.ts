@@ -30,13 +30,14 @@ async function headers() {
   }
 }
 
-export async function secJson<T>(ctx: SecContext, url: string, ttl: number, title: string) {
+export async function secJson<T>(ctx: SecContext, url: string, ttl: number, title: string, reject?: (body: string) => string | undefined) {
   const result = await getJson<T>(url, {
     headers: await headers(),
     ttl,
     refresh: ctx.refresh,
     signal: ctx.signal,
     minIntervalMs: MIN_INTERVAL_MS,
+    reject,
   })
   ctx.collector.add({ publisher: SEC_PUBLISHER, title, url, tier: "official", retrieved_at: result.fetchedAt })
   return result.json

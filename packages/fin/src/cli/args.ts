@@ -1,6 +1,7 @@
 import z from "zod"
+import { UsageError } from "../core/errors"
 
-export class UsageError extends Error {}
+export { UsageError }
 
 export type ParsedArgv = {
   positional: string[]

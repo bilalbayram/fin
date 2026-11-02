@@ -19,6 +19,19 @@ type EftsHit = {
 
 type EftsResponse = { hits: { total: { value: number; relation: string }; hits: EftsHit[] } }
 
+// EFTS reports backend failures as HTTP 200 with an error object instead of hits.
+export function searchFailure(body: string) {
+  let payload: { hits?: { hits?: unknown }; errorType?: string; errorMessage?: string }
+  try {
+    payload = JSON.parse(body)
+  } catch {
+    return undefined
+  }
+  if (Array.isArray(payload?.hits?.hits)) return undefined
+  const detail = payload?.errorType ? `${payload.errorType}${payload.errorMessage ? `: ${payload.errorMessage.slice(0, 120)}` : ""}` : "unexpected response"
+  return `EDGAR full-text search error (${detail}). SEC's search backend fails intermittently, more often on unquoted multi-word queries: retry, or quote the phrase, e.g. '"supply chain"'.`
+}
+
 const PAGE_SIZE = 100
 
 export async function search(
@@ -45,6 +58,7 @@ export async function search(
       `https://efts.sec.gov/LATEST/search-index?${params}`,
       TTL.search,
       "EDGAR full-text search",
+      searchFailure,
     )
     total = payload.hits.total.value
     for (const hit of payload.hits.hits) {
