@@ -1,6 +1,6 @@
 ---
 name: fin
-description: Research public companies with primary-source data and cite every number. Use for fundamentals (revenue, margins, cash flow, balance sheet), SEC filings and their text, insider trades (Form 4), full-text search across filings, cross-company comparisons, stock prices, and writing company or equity research reports. Data comes straight from SEC EDGAR and is labelled official or unofficial.
+description: Research public companies with primary-source data and cite every number. Use for fundamentals (revenue, margins, cash flow, balance sheet), SEC filings and their text, insider trades (Form 4), full-text search across filings, cross-company comparisons, stock and index prices on any exchange (US, Borsa Istanbul, Europe, Asia), and writing company or equity research reports, including for non-US companies. Fundamentals and filings come straight from SEC EDGAR; other countries' registries (e.g. KAP for Turkey) are listed in references. Every source is labelled official or unofficial.
 ---
 
 # Fin
@@ -37,7 +37,7 @@ Or set `SEC_EDGAR_IDENTITY`. Never invent an identity.
 | `fin sec document <url> [--find "phrase"] [--offset N]` | Filing text from sec.gov, paged; `--find` returns offsets to jump to |
 | `fin sec search "<text>" [--company] [--forms] [--since]` | Full-text search inside all EDGAR filings since 2001 |
 | `fin sec insiders <ticker> [--since] [--limit 20]` | Form 4 transactions: owner, role, code, shares, price, holdings after, 10b5-1 flag |
-| `fin price <symbol> [--range 1y] [--interval 1d]` | Last price, previous close, OHLCV bars. Tier `unofficial` |
+| `fin price <symbol> [--range 1y] [--interval 1d]` | Last price, previous close, OHLCV bars, any exchange: Yahoo symbols such as `AAPL`, `THYAO.IS` (BIST), `XU100.IS`, `SAP.DE`, `TRY=X`. Tier `unofficial` |
 
 `fin sec facts --help` lists the curated metrics. Add `--refresh` to any command to bypass the cache.
 
