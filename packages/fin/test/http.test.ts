@@ -74,3 +74,10 @@ describe("getText reject", () => {
     expect((await getText(url("/soft-fail"), { ttl: 60 })).cached).toBe(false)
   }, 10_000)
 })
+
+test("a cached body that reject() refuses is ignored and refetched", async () => {
+  await getText(url("/cached-bad"), { ttl: 60 })
+  const reject = (body: string) => (body === "body 1" ? "stale error body" : undefined)
+  const fresh = await getText(url("/cached-bad"), { ttl: 60, reject })
+  expect(fresh).toMatchObject({ body: "body 2", cached: false })
+})

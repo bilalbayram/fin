@@ -12511,7 +12511,7 @@ function retryable(status) {
 async function getText(url2, options) {
   if (options.ttl > 0 && !options.refresh) {
     const cached2 = await readCache(url2, options.ttl);
-    if (cached2)
+    if (cached2 && !options.reject?.(cached2.body))
       return cached2;
   }
   let lastError;
@@ -13096,13 +13096,14 @@ var ANNUAL_FORMS = /^(10-K|10-KT|20-F|40-F)(\/A)?$/;
 function days(start, end) {
   return (Date.parse(end) - Date.parse(start)) / 86400000;
 }
-function pickUnit(units, kind) {
+function pickUnit(units, kind, eligible) {
   const names = Object.keys(units);
   if (kind === "shares")
     return names.find((name) => name === "shares");
   const pattern = kind === "per_share" ? /^[A-Z]{3}\/shares$/ : /^[A-Z]{3}$/;
-  const latest = (name) => units[name].reduce((max, fact) => fact.end > max ? fact.end : max, "");
-  return names.filter((name) => pattern.test(name)).sort((a, b) => latest(b).localeCompare(latest(a)) || units[b].length - units[a].length || Number(b.startsWith("USD")) - Number(a.startsWith("USD")))[0];
+  const usable = Object.fromEntries(names.filter((name) => pattern.test(name)).map((name) => [name, units[name].filter(eligible)]));
+  const latest = (name) => usable[name].reduce((max, fact) => fact.end > max ? fact.end : max, "");
+  return Object.keys(usable).filter((name) => usable[name].length).sort((a, b) => latest(b).localeCompare(latest(a)) || usable[b].length - usable[a].length || Number(b.startsWith("USD")) - Number(a.startsWith("USD")))[0];
 }
 function inPeriod(fact, timing, period) {
   if (timing === "duration") {
@@ -13123,7 +13124,7 @@ function extractMetric(facts, key, period, limit) {
     const concept = facts.facts[taxonomy]?.[name];
     if (!concept)
       return;
-    const unit = pickUnit(concept.units, def.kind);
+    const unit = pickUnit(concept.units, def.kind, (fact) => inPeriod(fact, def.timing, period));
     if (!unit)
       return;
     for (const fact of concept.units[unit] ?? []) {

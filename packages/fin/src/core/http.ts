@@ -95,7 +95,8 @@ function retryable(status: number) {
 export async function getText(url: string, options: FetchOptions): Promise<FetchResult> {
   if (options.ttl > 0 && !options.refresh) {
     const cached = await readCache(url, options.ttl)
-    if (cached) return cached
+    // Re-check cached bodies too: older versions cached responses that reject() now refuses.
+    if (cached && !options.reject?.(cached.body)) return cached
   }
 
   let lastError: unknown

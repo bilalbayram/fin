@@ -226,16 +226,19 @@ function days(start: string, end: string) {
   return (Date.parse(end) - Date.parse(start)) / 86_400_000
 }
 
-function pickUnit(units: Record<string, XbrlFact[]>, kind: Kind) {
+function pickUnit(units: Record<string, XbrlFact[]>, kind: Kind, eligible: (fact: XbrlFact) => boolean) {
   const names = Object.keys(units)
   if (kind === "shares") return names.find((name) => name === "shares")
   const pattern = kind === "per_share" ? /^[A-Z]{3}\/shares$/ : /^[A-Z]{3}$/
-  const latest = (name: string) => units[name]!.reduce((max, fact) => (fact.end > max ? fact.end : max), "")
+  // Judge each currency only by facts usable for the requested period, so a newer interim USD fact
+  // cannot win an annual query.
+  const usable = Object.fromEntries(names.filter((name) => pattern.test(name)).map((name) => [name, units[name]!.filter(eligible)]))
+  const latest = (name: string) => usable[name]!.reduce((max, fact) => (fact.end > max ? fact.end : max), "")
   // Reporting currency = newest data, then the longest history. Foreign filers often add USD convenience
   // translations (SAP: one stray USD year; TSM: USD alongside TWD), which must not displace it.
-  return names
-    .filter((name) => pattern.test(name))
-    .sort((a, b) => latest(b).localeCompare(latest(a)) || units[b]!.length - units[a]!.length || Number(b.startsWith("USD")) - Number(a.startsWith("USD")))[0]
+  return Object.keys(usable)
+    .filter((name) => usable[name]!.length)
+    .sort((a, b) => latest(b).localeCompare(latest(a)) || usable[b]!.length - usable[a]!.length || Number(b.startsWith("USD")) - Number(a.startsWith("USD")))[0]
 }
 
 export function inPeriod(fact: XbrlFact, timing: MetricDef["timing"], period: Period) {
@@ -257,7 +260,7 @@ export function extractMetric(facts: CompanyFacts, key: string, period: Period, 
     const [taxonomy, name] = tag.split(":") as [string, string]
     const concept = facts.facts[taxonomy]?.[name]
     if (!concept) return
-    const unit = pickUnit(concept.units, def.kind)
+    const unit = pickUnit(concept.units, def.kind, (fact) => inPeriod(fact, def.timing, period))
     if (!unit) return
     for (const fact of concept.units[unit] ?? []) {
       if (typeof fact.val !== "number" || !inPeriod(fact, def.timing, period)) continue

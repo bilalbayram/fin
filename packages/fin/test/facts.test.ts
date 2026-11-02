@@ -158,3 +158,23 @@ test("prefers the reporting currency over a same-period USD convenience translat
   })
   expect(extractMetric(data, "revenue", "annual", 5)[0]).toMatchObject({ unit: "TWD", value: 2900 })
 })
+
+test("a newer interim USD fact does not pick USD for an annual query", () => {
+  const data = company({
+    "ifrs-full": {
+      Revenue: {
+        units: {
+          EUR: [
+            fact({ start: "2024-01-01", end: "2024-12-31", val: 34, form: "20-F" }),
+            fact({ start: "2025-01-01", end: "2025-12-31", val: 36, form: "20-F" }),
+          ],
+          USD: [
+            fact({ start: "2024-01-01", end: "2024-12-31", val: 37, form: "20-F" }),
+            fact({ start: "2026-01-01", end: "2026-03-31", val: 10, form: "6-K" }),
+          ],
+        },
+      },
+    },
+  })
+  expect(extractMetric(data, "revenue", "annual", 5)[0]).toMatchObject({ unit: "EUR", value: 36 })
+})
