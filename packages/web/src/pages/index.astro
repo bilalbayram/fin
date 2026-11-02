@@ -1,5 +1,5 @@
 ---
-const githubHref = "https://github.com/bilalbayram/opencode-finance"
+const githubHref = "https://github.com/bilalbayram/fin"
 const reports = [
   {
     ticker: "AAPL",
@@ -43,8 +43,6 @@ const steps = [
   "Answer or report, every figure cited",
 ] as const
 
-const agents = "Claude Code, Codex, Cursor, Gemini CLI, Copilot CLI, OpenCode"
-
 const points = [
   {
     title: "Primary sources",
@@ -65,20 +63,20 @@ const points = [
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>opencode-finance | Finance skill for coding agents</title>
+    <title>fin | Finance skill for AI agents</title>
     <meta
       name="description"
-      content="A finance skill for coding agents: SEC filings, XBRL fundamentals, insider trades and prices from primary sources, with every number cited."
+      content="A finance skill for AI agents: SEC filings, XBRL fundamentals, insider trades and prices from primary sources, with every number cited."
     />
   </head>
   <body>
     <main class="landing-shell">
       <section class="hero" aria-labelledby="landing-title">
         <div class="hero-main">
-          <p class="kicker">opencode-finance / skill</p>
+          <p class="kicker">fin / skill</p>
           <h1 id="landing-title">Equity research from the source.</h1>
           <p class="lede">
-            A finance skill for {agents}. Your agent reads SEC filings and as-reported fundamentals directly, and cites the
+            A finance skill for any agent that supports skills. Your agent reads SEC filings and as-reported fundamentals directly, and cites the
             filing behind every number.
           </p>
           <div class="actions">
@@ -100,9 +98,8 @@ const points = [
             </a>
           </div>
           <p class="terminal" role="note">
-            Install for every agent on this machine:
-            <code>curl -fsSL https://opencode.finance/install.sh | bash</code>
-            or <code>npx opencode-finance-skill install</code>
+            Install:
+            <code>npx skills add bilalbayram/fin</code>
           </p>
           <dl class="metrics" aria-label="Workflow details">
             {metrics.map((metric) => (
@@ -138,7 +135,7 @@ const points = [
           <p class="kicker">Sample reports</p>
           <h2 id="reports-title">Earlier report examples</h2>
           <p class="intro">
-            These PDFs came from the earlier opencode-finance report pipeline. The skill now writes markdown reports and
+            These PDFs came from the earlier report pipeline. The skill now writes markdown reports and
             exports a PDF only when you ask for one.
           </p>
         </header>

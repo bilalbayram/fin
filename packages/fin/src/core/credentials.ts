@@ -51,7 +51,7 @@ export async function credentialStatus(id: CredentialProviderId) {
   const provider = findProvider(id)!
   const env = provider.env.find((key) => process.env[key]?.trim())
   if (env) return { value: process.env[env]!.trim(), origin: `environment (${env})` }
-  for (const file of [Paths.credentials, Paths.legacyCredentials]) {
+  for (const file of [Paths.credentials, ...Paths.legacyCredentials]) {
     const value = (await readStore(file))[id]?.key?.trim()
     if (value) return { value, origin: file }
   }
